@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     azure_openai_endpoint: Optional[str] = None
     azure_openai_api_key: Optional[str] = None
     azure_openai_api_version: str = "2024-02-15-preview"
-    azure_openai_model_name: str = "gpt-4o"
+    azure_openai_model_name: str = "gpt-4.1"
     gemini_api_key: Optional[str] = None
 
     model_config = SettingsConfigDict(
