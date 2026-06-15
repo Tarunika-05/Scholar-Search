@@ -22,7 +22,7 @@ class AzureOpenAIProvider(LLMProvider):
 
     def generate(self, prompt: str) -> str | None:
         if not self.api_key or not self.endpoint:
-            return None
+            return "ERROR: Missing AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT in Hugging Face Secrets. Please add them!"
             
         import urllib.request
         import json
