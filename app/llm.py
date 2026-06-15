@@ -28,12 +28,13 @@ class AzureOpenAIProvider(LLMProvider):
         import json
         
         # Format: {endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api-version}
-        base_url = self.endpoint.rstrip("/")
-        url = f"{base_url}/openai/deployments/{self.deployment}/chat/completions?api-version={self.api_version}"
+        base_url = self.endpoint.strip().rstrip("/")
+        deployment = self.deployment.strip() if self.deployment else ""
+        url = f"{base_url}/openai/deployments/{deployment}/chat/completions?api-version={self.api_version.strip()}"
         
         headers = {
             "Content-Type": "application/json",
-            "api-key": self.api_key
+            "api-key": self.api_key.strip()
         }
         data = {
             "messages": [{"role": "user", "content": prompt}],
