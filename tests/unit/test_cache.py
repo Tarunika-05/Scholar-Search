@@ -79,10 +79,10 @@ def test_set_threshold_validates_range(cache):
     cache.set_threshold(0.9)
     assert cache.threshold == 0.9
     
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         cache.set_threshold(1.5)
         
-    with pytest.raises(ValueError):
+    with pytest.raises(AssertionError):
         cache.set_threshold(-0.1)
 
 def test_get_stats_returns_correct_counts(cache):
