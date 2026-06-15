@@ -1,0 +1,46 @@
+services:
+  # ──────────────────────────────────────────────────────────────────
+  # 1. Backend: FastAPI Web Service
+  # ──────────────────────────────────────────────────────────────────
+  - type: web
+    name: semantic-search-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: ohio
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false # Set manually in dashboard to Neon DB
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false # Set manually in dashboard
+      - key: CORS_ORIGINS
+        # Allow requests from the frontend site (we will update this once frontend URL is known, or allow all for now)
+        value: "*"
+      - key: ADMIN_SECRET_KEY
+        sync: false # Set manually in dashboard
+      - key: USER_SECRET_KEY
+        sync: false # Set manually in dashboard
+
+  # ──────────────────────────────────────────────────────────────────
+  # 2. Frontend: React + Vite Static Site
+  # ──────────────────────────────────────────────────────────────────
+  - type: web
+    name: semantic-search-frontend
+    env: static
+    plan: free
+    region: ohio
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        # We point the frontend to the backend service created above.
+        # Render provides RENDER_EXTERNAL_URL dynamically to services.
+        fromService:
+          type: web
+          name: semantic-search-api
+          envVarKey: RENDER_EXTERNAL_URL

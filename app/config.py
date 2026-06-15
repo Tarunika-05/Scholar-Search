@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # App Settings
     project_name: str = "Semantic Search API"
     environment: str = "development"
+    cors_origins: str = "*"
     
     # API Keys
     admin_secret_key: str = "admin-secret-key"
