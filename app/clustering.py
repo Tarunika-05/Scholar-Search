@@ -181,16 +181,14 @@ def get_cluster_distributions(gmm: GaussianMixture, reduced_embeddings: np.ndarr
                probs[i][j] = probability that document i belongs to cluster j.
     """
     probs = gmm.predict_proba(reduced_embeddings)
-    return probs
-
+    return probs  # type: ignore
 
 def get_dominant_cluster(probs: np.ndarray) -> np.ndarray:
     """
     Get the dominant (most probable) cluster for each document.
     Used as a fast lookup key in the semantic cache.
     """
-    return np.argmax(probs, axis=1)
-
+    return np.argmax(probs, axis=1)  # type: ignore
 
 def get_cluster_entropy(probs: np.ndarray) -> np.ndarray:
     """
@@ -210,7 +208,7 @@ def get_cluster_entropy(probs: np.ndarray) -> np.ndarray:
     """
     probs_clipped = np.clip(probs, 1e-10, 1.0)
     entropy = -np.sum(probs_clipped * np.log(probs_clipped), axis=1)
-    return entropy
+    return entropy  # type: ignore
 
 
 # ─────────────────────────────────────────────────────────────────────

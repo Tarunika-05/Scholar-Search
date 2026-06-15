@@ -13,7 +13,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/analytics.d
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-Base = declarative_base()
+from typing import Any
+Base: Any = declarative_base()
 
 class QueryLog(Base):
     __tablename__ = "query_logs"

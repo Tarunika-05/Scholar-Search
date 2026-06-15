@@ -44,7 +44,8 @@ class AzureOpenAIProvider(LLMProvider):
         try:
             with urllib.request.urlopen(req) as response:
                 result = json.loads(response.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"].strip()
+                content = result["choices"][0]["message"]["content"]
+                return str(content).strip() if content else None
         except Exception as e:
             logger.error(f"Error generating Azure OpenAI content: {e}")
             return None
@@ -70,7 +71,7 @@ class GeminiProvider(LLMProvider):
             return None
         try:
             response = self.model.generate_content(prompt)
-            return response.text.strip()
+            return str(response.text).strip() if response.text else None
         except Exception as e:
             logger.error(f"Error generating LLM content: {e}")
             return None

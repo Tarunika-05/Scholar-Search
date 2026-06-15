@@ -113,7 +113,7 @@ class BM25Index:
             self.doc_lengths.append(len(tokens))
 
             # Compute term frequencies for this document
-            tf = {}
+            tf: dict[str, int] = {}
             for token in tokens:
                 tf[token] = tf.get(token, 0) + 1
             self.doc_term_freqs.append(tf)
@@ -261,7 +261,7 @@ class HybridSearcher:
             })
 
         # Sort by hybrid score descending
-        scored_candidates.sort(key=lambda x: x["hybrid_score"], reverse=True)
+        scored_candidates.sort(key=lambda x: float(x["hybrid_score"]), reverse=True)
         
         # Slicing for pagination after the fusion is complete
         top_results = scored_candidates[offset:offset+limit]
@@ -287,4 +287,4 @@ def load_bm25() -> BM25Index | None:
     with open(BM25_INDEX_PATH, "rb") as f:
         bm25 = pickle.load(f)
     print(f"✅ BM25 index loaded. Vocabulary: {len(bm25.df)} terms")
-    return bm25
+    return bm25  # type: ignore
