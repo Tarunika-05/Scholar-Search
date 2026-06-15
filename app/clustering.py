@@ -13,9 +13,9 @@ from sklearn.decomposition import PCA
 # 1. Soft assignments — GMM produces a probability distribution over
 #    clusters for each document. A post about "gun legislation" gets:
 #    [0.6 politics, 0.3 firearms, 0.1 law] — not a single hard label.
-# 2. Captures overlapping topics — the 20 Newsgroups dataset has known
-#    topic overlaps (religion/politics, space/science). GMM naturally
-#    models this via its covariance structure.
+# 2. Captures overlapping topics — the ArXiv dataset has known
+#    multi-label properties (a paper on Multimodal AI belongs to both
+#    Computer Vision and NLP). GMM assigns soft probabilities for these.
 # 3. Probabilistic foundation — uncertainty in cluster membership is
 #    explicit and measurable, not a side effect.
 #
@@ -24,8 +24,8 @@ from sklearn.decomposition import PCA
 #   to cluster 3 or it doesn't.
 #
 # Why NOT DBSCAN:
-# - DBSCAN labels many newsgroup posts as noise (-1) due to the high
-#   density variation in text embeddings. Not suitable here.
+# - DBSCAN labels many abstract papers as noise (-1) due to the high
+#   density variance in semantic embeddings. Not suitable here.
 # ─────────────────────────────────────────────────────────────────────
 
 CLUSTERING_CACHE_PATH = "data/clustering_cache.pkl"
@@ -57,13 +57,14 @@ PCA_COMPONENTS = 50
 # Multiple cluster counts were tested, and the optimal value was determined to be 15 clusters, 
 # which provided the best balance between capturing semantic structure and avoiding overfitting.
 #
-# Candidate range: [5, 8, 10, 12, 15, 18, 20, 25]
-# This covers plausible values given 20 newsgroup categories.
+# Candidate range: [5, 30]
+# Sweep cluster counts from 5 to 30.
+# This covers plausible values given ArXiv categories and sub-fields.
 # Too few clusters (< 5) forces unrelated topics together.
 # Too many (> 25) splits coherent topics into indistinguishable pieces.
 # ─────────────────────────────────────────────────────────────────────
 
-BIC_CANDIDATES = [5, 8, 10, 12, 15, 18, 20, 25]
+BIC_CANDIDATES = [5, 8, 10, 12, 15, 18, 20, 25, 30]
 
 
 def reduce_dimensions(embeddings: np.ndarray) -> tuple[np.ndarray, PCA]:

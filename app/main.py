@@ -1,5 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
+import time
+import uuid
+import structlog
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from app.api import router
 from app.dataset import load_documents
@@ -12,6 +18,13 @@ from app.clustering import (
 )
 from app.cache import SemanticCache
 from app.hybrid_search import BM25Index, HybridSearcher, save_bm25, load_bm25
+from app.logger import setup_logging, get_logger
+from app.rate_limit import setup_rate_limiting
+from app.analytics import init_db
+
+# Setup structured logging
+setup_logging()
+logger = get_logger("main")
 
 # ─────────────────────────────────────────────────────────────────────
 # App Lifespan (Startup / Shutdown context)
@@ -19,7 +32,10 @@ from app.hybrid_search import BM25Index, HybridSearcher, save_bm25, load_bm25
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("\n🚀 Starting Semantic Search Service...\n")
+    logger.info("Starting up application...")
+    
+    # Initialize analytics database
+    await init_db()
 
     # Store objects natively on app.state
     
@@ -30,7 +46,7 @@ async def lifespan(app: FastAPI):
     embeddings, documents, labels = load_embeddings()
 
     if embeddings is None:
-        print("⚙️  No cached embeddings found. Building from scratch...")
+        logger.info("No cached embeddings found. Building from scratch...")
         documents, labels, label_names = load_documents()
         embeddings = embed_documents(documents, app.state.model)
         save_embeddings(embeddings, documents, labels)
@@ -42,7 +58,7 @@ async def lifespan(app: FastAPI):
     # ── Step 3: FAISS Index (with metadata) ──
     index_data = load_index()
     if index_data is None:
-        print("⚙️  No cached FAISS index found. Building...")
+        logger.info("No cached FAISS index found. Building...")
         index_data = build_index(embeddings, labels)
         save_index(index_data)
         
@@ -51,7 +67,7 @@ async def lifespan(app: FastAPI):
     # ── Step 4: Clustering ──
     gmm, pca, cluster_probs, dominant_clusters = load_clustering()
     if gmm is None:
-        print("⚙️  No cached clustering found. Fitting GMM...")
+        logger.info("No cached clustering found. Fitting GMM...")
         reduced, pca = reduce_dimensions(embeddings)
         gmm = fit_gmm(reduced, n_clusters=15)
         cluster_probs = get_cluster_distributions(gmm, reduced)
@@ -67,7 +83,7 @@ async def lifespan(app: FastAPI):
     # ── Step 5: BM25 Index (for hybrid search) ──
     bm25 = load_bm25()
     if bm25 is None:
-        print("⚙️  No cached BM25 index found. Building...")
+        logger.info("No cached BM25 index found. Building...")
         bm25 = BM25Index()
         bm25.fit(documents)
         save_bm25(bm25)
@@ -80,12 +96,12 @@ async def lifespan(app: FastAPI):
     # ── Step 7: Hybrid Searcher ──
     app.state.hybrid_searcher = HybridSearcher(bm25_index=bm25)
 
-    print("\n✅ Service ready.\n")
+    logger.info("Service ready.")
 
     yield  # Server runs here
 
     # Shutdown
-    print("\n🛑 Shutting down...")
+    logger.info("Shutting down...")
     app.state._state.clear()
 
 
@@ -93,15 +109,48 @@ async def lifespan(app: FastAPI):
 # FastAPI App
 # ─────────────────────────────────────────────────────────────────────
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
-    title="Semantic Search API: Powered by Cognitive RAG & Semantic Caching",
-    description=(
-        "An enterprise-grade Retrieval-Augmented Generation (RAG) backend designed for sub-millisecond context provisioning. "
-        "Engineered with a dual-encoder hybrid search architecture (FAISS dense vector similarity + Okapi BM25 sparse lexical matching) "
-        "and accelerated by a custom probabilistic GMM cluster-aware semantic cache to massively reduce LLM inference latency."
-    ),
-    version="2.0.0",
+    title="Cognitive RAG Semantic Caching API",
+    description="A high-performance semantic search and caching engine for ArXiv ML papers.",
+    version="1.0.0",
     lifespan=lifespan
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust this in production!
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+setup_rate_limiting(app)
+
+@app.middleware("http")
+async def structlog_middleware(request: Request, call_next):
+    # Create a unique request ID
+    request_id = str(uuid.uuid4())
+    
+    # Bind request_id to structlog contextvars for the duration of the request
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        client_ip=request.client.host if request.client else None
+    )
+    
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
+    
+    # Log the request completion
+    logger.info("Request completed", status_code=response.status_code, duration_ms=round(process_time, 2))
+    
+    # Return the request ID in headers for client tracing
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 app.include_router(router)

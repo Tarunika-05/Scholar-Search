@@ -123,6 +123,8 @@ class CacheEntry:
     last_accessed: float = field(default_factory=time.time)
     cluster_probs: Optional[np.ndarray] = None
     access_count: int = 0
+    generated_answer: Optional[str] = None
+    citations: Optional[list[dict]] = None
 
 
 class SemanticCache:
@@ -275,7 +277,8 @@ class SemanticCache:
         embedding: np.ndarray,
         result: str,
         dominant_cluster: int,
-        cluster_probs: Optional[np.ndarray] = None
+        cluster_probs: Optional[np.ndarray] = None,
+        generated_answer: Optional[str] = None
     ) -> CacheEntry:
         """
         Add a new query+result to the cache.
@@ -293,26 +296,36 @@ class SemanticCache:
             result:           Computed result to cache
             dominant_cluster: Cluster this query belongs to
             cluster_probs:    Full soft distribution (for multi-cluster lookup)
+            generated_answer: The AI synthesized answer, if generated
+            citations:        List of citations used by the AI
 
         Returns:
             The newly created CacheEntry
         """
-        # ── Evict expired entries (lazy TTL cleanup) ──
-        # I do this during store() rather than lookup() to avoid
-        # adding latency to the read path. Writes are less frequent
-        # than reads (every miss triggers a store, every query triggers a lookup).
+    def store(self, query: str, embedding: np.ndarray, result: str,
+              dominant_cluster: int, cluster_probs: np.ndarray | None = None,
+              generated_answer: str | None = None,
+              citations: list[dict] | None = None):
+        """
+        Store a new query and its result in the cache.
+        Evicts stale and LRU entries if necessary.
+        """
+        # 1. Lazy cleanup of stale entries (TTL)
         self._evict_expired()
 
-        # ── LRU eviction if at capacity ──
+        # 2. Check LRU capacity
         if len(self._store) >= self.max_entries:
             self._evict_lru()
 
+        # 3. Store new entry
         entry = CacheEntry(
             query=query,
             embedding=embedding,
             result=result,
             dominant_cluster=dominant_cluster,
-            cluster_probs=cluster_probs
+            cluster_probs=cluster_probs,
+            generated_answer=generated_answer,
+            citations=citations
         )
 
         # Add to main store

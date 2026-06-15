@@ -37,11 +37,11 @@ import os
 #
 # Why post-filtering instead of pre-filtering?
 # Pre-filtering would require building separate FAISS indices per
-# category (20 indices for 20 newsgroups). This wastes memory and
-# complicates the code. Post-filtering on a 5000-doc corpus is
-# negligible — I over-fetch by 2x and filter, still <1ms.
-# For million-scale corpora, pre-filtering or partitioned indices
-# would be the right call.
+# category (e.g. 5 indices for 5 ArXiv categories). This wastes memory and
+# complicates cross-category queries. A single unified index is better.
+# Post-filtering on a 5000-doc corpus is negligible — I over-fetch by 2x
+# and filter, still <1ms. For million-scale corpora, pre-filtering or
+# partitioned indices would be the right call.
 # ─────────────────────────────────────────────────────────────────────
 
 FAISS_INDEX_PATH = "data/faiss_index.pkl"
@@ -69,7 +69,7 @@ def build_index(embeddings: np.ndarray, labels: list | None = None) -> dict:
     dimension = embeddings.shape[1]  # 384 for MiniLM
     n_docs = len(embeddings)
 
-    print(f"🔄 Building FAISS index (dimension={dimension}, docs={n_docs})...")
+    print(f"Building FAISS index (dimension={dimension}, docs={n_docs})...")
 
     # Build base index + ID mapping
     base_index = faiss.IndexFlatIP(dimension)
@@ -90,7 +90,7 @@ def build_index(embeddings: np.ndarray, labels: list | None = None) -> dict:
             "category": int(labels[i]) if labels is not None else -1,
         }
 
-    print(f"✅ FAISS index built. Total vectors: {index.ntotal}")
+    print(f"[SUCCESS] FAISS index built. Total vectors: {index.ntotal}")
     if labels is not None:
         n_categories = len(set(labels))
         print(f"   Metadata: {n_categories} categories indexed for filtered retrieval")
@@ -98,9 +98,9 @@ def build_index(embeddings: np.ndarray, labels: list | None = None) -> dict:
     return {"index": index, "metadata": metadata}
 
 
-def search_index(index_data, query_embedding: np.ndarray, top_k: int = 5):
+def search_index(index_data, query_embedding: np.ndarray, limit: int = 5, offset: int = 0):
     """
-    Search the FAISS index for the top_k most similar documents.
+    Search the FAISS index for the most similar documents.
 
     Handles both old-style (raw FAISS index) and new-style (dict with
     index + metadata) for backward compatibility.
@@ -108,7 +108,8 @@ def search_index(index_data, query_embedding: np.ndarray, top_k: int = 5):
     Args:
         index_data:      FAISS index or dict with 'index' + 'metadata'
         query_embedding: 1D numpy array of shape (384,), L2-normalized
-        top_k:           Number of results to return
+        limit:           Number of results to return
+        offset:          Number of results to skip (pagination)
 
     Returns:
         distances: similarity scores (cosine similarity since normalized)
@@ -117,35 +118,30 @@ def search_index(index_data, query_embedding: np.ndarray, top_k: int = 5):
     # Support both raw index and dict wrapper
     index = index_data["index"] if isinstance(index_data, dict) else index_data
 
+    # We need to fetch offset + limit documents to skip the first 'offset' ones
+    fetch_k = offset + limit
+    
     # FAISS expects shape (1, dimension) for single query
     query = np.array([query_embedding], dtype=np.float32)
-    distances, indices = index.search(query, top_k)
+    distances, indices = index.search(query, fetch_k)
 
-    # Flatten from (1, top_k) to (top_k,)
-    return distances[0], indices[0]
+    # Flatten and slice for pagination
+    return distances[0][offset:], indices[0][offset:]
 
 
 def search_with_filter(index_data: dict, query_embedding: np.ndarray,
-                       category_filter: int | None = None, top_k: int = 5):
+                       category_filter: int | None = None, limit: int = 5, offset: int = 0):
     """
-    Search FAISS with optional metadata-based category filtering.
+    Search FAISS with optional metadata-based category filtering and pagination.
 
     Strategy: over-fetch from FAISS, then post-filter by metadata.
-    Over-fetch factor is 3x — for 5000 docs with 20 categories,
-    each category has ~250 docs. Fetching top_k * 3 from FAISS then
-    filtering gives enough candidates in virtually all cases.
-
-    Why post-filtering instead of pre-filtering (separate indices)?
-    - Pre-filtering requires 20 separate FAISS indices (one per category)
-    - Wastes memory (20x index overhead) and complicates code
-    - Post-filtering on 5000 docs is <1ms — no practical latency cost
-    - For million-scale corpora, pre-filtering would be warranted
 
     Args:
         index_data:       dict with 'index' + 'metadata'
         query_embedding:  L2-normalized query vector (384-dim)
         category_filter:  integer category ID to filter by, or None for unfiltered
-        top_k:            number of filtered results to return
+        limit:            number of filtered results to return
+        offset:           number of filtered results to skip
 
     Returns:
         filtered_distances: similarity scores for matching documents
@@ -153,14 +149,15 @@ def search_with_filter(index_data: dict, query_embedding: np.ndarray,
     """
     if category_filter is None:
         # No filter — standard search
-        return search_index(index_data, query_embedding, top_k)
+        return search_index(index_data, query_embedding, limit, offset)
 
     metadata = index_data.get("metadata", {})
 
     # Over-fetch to ensure enough candidates survive filtering.
     # 3x multiplier handles skewed category distributions.
-    over_fetch = top_k * 3
-    distances, indices = search_index(index_data, query_embedding, over_fetch)
+    # We must fetch enough to cover both offset and limit AFTER filtering.
+    over_fetch = (offset + limit) * 3
+    distances, indices = search_index(index_data, query_embedding, limit=over_fetch, offset=0)
 
     # Post-filter by category
     filtered_distances = []
@@ -173,12 +170,14 @@ def search_with_filter(index_data: dict, query_embedding: np.ndarray,
         if doc_meta.get("category") == category_filter:
             filtered_distances.append(dist)
             filtered_indices.append(idx)
-            if len(filtered_distances) >= top_k:
-                break
+            
+    # Apply pagination AFTER filtering
+    final_distances = filtered_distances[offset:offset+limit]
+    final_indices = filtered_indices[offset:offset+limit]
 
     return (
-        np.array(filtered_distances, dtype=np.float32),
-        np.array(filtered_indices, dtype=np.int64)
+        np.array(final_distances, dtype=np.float32),
+        np.array(final_indices, dtype=np.int64)
     )
 
 
@@ -190,7 +189,7 @@ def save_index(index_data):
     """
     with open(FAISS_INDEX_PATH, "wb") as f:
         pickle.dump(index_data, f)
-    print(f"✅ FAISS index + metadata saved to {FAISS_INDEX_PATH}")
+    print(f"[SUCCESS] FAISS index + metadata saved to {FAISS_INDEX_PATH}")
 
 
 def load_index():
@@ -204,17 +203,17 @@ def load_index():
     if not os.path.exists(FAISS_INDEX_PATH):
         return None
 
-    print("📂 Loading cached FAISS index from disk...")
+    print("Loading cached FAISS index from disk...")
     with open(FAISS_INDEX_PATH, "rb") as f:
         data = pickle.load(f)
 
     # Handle legacy format (raw index without metadata)
     if isinstance(data, dict):
-        print(f"✅ FAISS index loaded. Total vectors: {data['index'].ntotal}")
+        print(f"[SUCCESS] FAISS index loaded. Total vectors: {data['index'].ntotal}")
         n_categories = len(set(m.get('category', -1) for m in data.get('metadata', {}).values()))
         print(f"   Metadata: {n_categories} categories available for filtered retrieval")
         return data
     else:
         # Legacy: raw FAISS index, wrap it
-        print(f"✅ FAISS index loaded (legacy format). Total vectors: {data.ntotal}")
+        print(f"[SUCCESS] FAISS index loaded (legacy format). Total vectors: {data.ntotal}")
         return {"index": data, "metadata": {}}

@@ -20,3 +20,10 @@ data/*
 
 # Testing
 .pytest_cache/
+
+# Local Environment
+.env
+.coverage
+*.zip
+experiments/results/
+app/data/

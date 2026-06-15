@@ -8,3 +8,15 @@ pydantic
 pytest
 requests
 httpx
+datasets
+google-generativeai
+
+ruff
+mypy
+slowapi
+structlog
+
+sqlalchemy
+asyncpg
+greenlet
+psycopg2-binary

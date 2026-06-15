@@ -9,8 +9,25 @@ services:
       - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/analytics
+    depends_on:
+      - postgres
     # Limit memory to prevent OOM kills on small host machines (model + FAISS + GMM takes ~1.5GB)
     deploy:
       resources:
         limits:
           memory: 3G
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=analytics
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

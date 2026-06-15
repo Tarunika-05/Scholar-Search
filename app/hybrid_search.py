@@ -51,10 +51,9 @@ def _tokenize(text: str) -> list[str]:
 
     Why not NLTK or spaCy?
     - I need fast, lightweight tokenization for BM25, not linguistic analysis
-    - BM25 works on raw tokens — stemming and lemmatization actually hurt
-      performance on technical corpora (newsgroups) because acronyms and
-      technical terms get mangled (e.g. "SCSI" → "scsi" is fine, but
-      stemming "graphics" → "graphic" loses the plural distinction)
+    - BM25 works on raw tokens — Semantic similarity is poor at exact matching. It has notoriously bad
+    #   performance on technical corpora (academic papers) because acronyms and
+    #   specific model names (e.g., "AdamW", "ResNet-50") don't embed well.
     - A simple regex split on non-alphanumeric characters is sufficient
 
     Returns:
@@ -102,7 +101,7 @@ class BM25Index:
         Args:
             documents: list of raw text strings (already preprocessed by dataset.py)
         """
-        print(f"🔄 Building BM25 sparse index over {len(documents)} documents...")
+        print(f"Building BM25 sparse index over {len(documents)} documents...")
 
         self.n_docs = len(documents)
         self.doc_term_freqs = []
@@ -133,15 +132,16 @@ class BM25Index:
             self.idf[term] = log((self.n_docs - df + 0.5) / (df + 0.5) + 1.0)
 
         vocab_size = len(self.df)
-        print(f"✅ BM25 index built. Vocabulary: {vocab_size} terms, Avg doc length: {self.avg_doc_length:.1f} tokens")
+        print(f"[SUCCESS] BM25 index built. Vocabulary: {vocab_size} terms, Avg doc length: {self.avg_doc_length:.1f} tokens")
 
-    def score(self, query: str, top_k: int = 5) -> tuple[np.ndarray, np.ndarray]:
+    def score(self, query: str, limit: int = 5, offset: int = 0) -> tuple[np.ndarray, np.ndarray]:
         """
         Score all documents against a query using BM25.
 
         Args:
             query:  raw query string
-            top_k:  number of top results to return
+            limit:  number of top results to return
+            offset: number of top results to skip
 
         Returns:
             scores:  numpy array of BM25 scores for top_k documents
@@ -169,7 +169,7 @@ class BM25Index:
                 scores[doc_idx] += idf * numerator / denominator
 
         # Get top-k indices sorted by score (descending)
-        top_indices = np.argsort(scores)[::-1][:top_k]
+        top_indices = np.argsort(scores)[::-1][offset:offset+limit]
         top_scores = scores[top_indices]
 
         return top_scores, top_indices
@@ -177,40 +177,34 @@ class BM25Index:
 
 class HybridSearcher:
     """
-    Combines dense (FAISS) and sparse (BM25) search with score fusion.
+    Combines dense (FAISS) and sparse (BM25) search with Reciprocal Rank Fusion (RRF).
 
-    Score fusion strategy: linear interpolation.
-        final_score = α × normalised_dense + (1 - α) × normalised_bm25
+    Score fusion strategy: Reciprocal Rank Fusion
+        rrf_score = (1 / (k + rank_dense)) + (1 / (k + rank_sparse))
 
-    Why linear interpolation over other fusion methods (e.g. RRF)?
-    - Reciprocal Rank Fusion (RRF) only uses rank positions, discarding
-      the actual similarity/BM25 scores. This loses information.
-    - Linear interpolation preserves score magnitudes, letting truly
-      high-confidence dense matches dominate when appropriate.
-    - The α parameter is interpretable: α=1.0 → pure dense, α=0.0 → pure BM25.
-    - Easy to tune at runtime via the API.
-
-    Score normalisation:
-    - Dense scores (cosine similarity) are already in [0, 1] for normalised vectors
-    - BM25 scores vary wildly (0 to 50+), so I min-max normalise to [0, 1]
-    - This ensures both signals contribute proportionally
+    Why RRF over linear interpolation?
+    - BM25 scores are unbounded and highly skewed by outliers, making min-max normalization unpredictable.
+    - Dense cosine similarities are clustered in a narrow band [0.4, 0.9], while BM25 can vary from 0 to 50.
+    - RRF relies strictly on rank position, making it scale-invariant and immune to outlier score distortions.
+    - It's a proven industry standard for hybrid search fusion without requiring tuning parameters.
     """
 
-    def __init__(self, bm25_index: BM25Index, alpha: float = DEFAULT_ALPHA):
+    def __init__(self, bm25_index: BM25Index, rrf_k: int = 60):
         self.bm25 = bm25_index
-        self.alpha = alpha
+        self.rrf_k = rrf_k
 
     def search(self, query: str, query_embedding: np.ndarray,
-               faiss_index, documents: list[str], top_k: int = 5) -> tuple[list, list, list]:
+               faiss_index, documents: list[str], limit: int = 5, offset: int = 0) -> tuple[list, list, list]:
         """
-        Perform hybrid search combining dense and sparse signals.
+        Perform hybrid search combining dense and sparse signals using RRF.
 
         Args:
             query:           raw query string (for BM25)
             query_embedding: L2-normalised query vector (for FAISS)
             faiss_index:     FAISS index or dict with 'index' key
             documents:       list of document texts
-            top_k:           number of results to return
+            limit:           number of results to return
+            offset:          number of results to skip
 
         Returns:
             final_indices:  document indices sorted by hybrid score
@@ -219,58 +213,58 @@ class HybridSearcher:
         """
         from app.vector_store import search_index
 
+        # Over-fetch for both retrievers to ensure we have enough candidates 
+        # to fuse, rank, and then apply pagination (offset and limit).
+        # We need to fetch (offset + limit) * 3 to be safe for RRF overlaps.
+        fetch_k = (offset + limit) * 3
+        n_candidates = min(fetch_k, len(documents))
+
         # ── Dense search (FAISS) ──
-        # Over-fetch to have enough candidates for fusion
-        n_candidates = min(top_k * 3, len(documents))
-        dense_distances, dense_indices = search_index(faiss_index, query_embedding, n_candidates)
+        dense_distances, dense_indices = search_index(faiss_index, query_embedding, limit=n_candidates, offset=0)
 
         # ── Sparse search (BM25) ──
-        bm25_scores, bm25_indices = self.bm25.score(query, n_candidates)
+        bm25_scores, bm25_indices = self.bm25.score(query, limit=n_candidates, offset=0)
 
         # ── Build unified candidate set ──
-        # Merge candidates from both retrievers to avoid missing documents
-        # that rank highly in one system but not the other.
         candidates = set()
-        for idx in dense_indices:
+        
+        dense_rank_map = {}
+        for rank, idx in enumerate(dense_indices, start=1):
             if idx >= 0:
-                candidates.add(int(idx))
-        for idx in bm25_indices:
+                idx = int(idx)
+                candidates.add(idx)
+                dense_rank_map[idx] = rank
+                
+        bm25_rank_map = {}
+        for rank, idx in enumerate(bm25_indices, start=1):
             if idx >= 0:
-                candidates.add(int(idx))
+                idx = int(idx)
+                candidates.add(idx)
+                bm25_rank_map[idx] = rank
 
-        # ── Score normalisation ──
-        # Dense scores: cosine similarity already in [-1, 1], shift to [0, 1]
-        dense_score_map = {}
-        for dist, idx in zip(dense_distances, dense_indices):
-            if idx >= 0:
-                dense_score_map[int(idx)] = float((dist + 1) / 2)  # [-1,1] → [0,1]
-
-        # BM25 scores: min-max normalise to [0, 1]
-        bm25_score_map = {}
-        bm25_max = max(bm25_scores) if len(bm25_scores) > 0 and max(bm25_scores) > 0 else 1.0
-        bm25_min = min(bm25_scores) if len(bm25_scores) > 0 else 0.0
-        bm25_range = bm25_max - bm25_min if bm25_max > bm25_min else 1.0
-        for score, idx in zip(bm25_scores, bm25_indices):
-            if idx >= 0:
-                bm25_score_map[int(idx)] = float((score - bm25_min) / bm25_range)
-
-        # ── Fusion ──
+        # ── Reciprocal Rank Fusion (RRF) ──
         scored_candidates = []
         for idx in candidates:
-            dense_s = dense_score_map.get(idx, 0.0)
-            sparse_s = bm25_score_map.get(idx, 0.0)
-            hybrid = self.alpha * dense_s + (1 - self.alpha) * sparse_s
+            dense_rank = dense_rank_map.get(idx, None)
+            bm25_rank = bm25_rank_map.get(idx, None)
+            
+            dense_rrf = 1.0 / (self.rrf_k + dense_rank) if dense_rank is not None else 0.0
+            bm25_rrf = 1.0 / (self.rrf_k + bm25_rank) if bm25_rank is not None else 0.0
+            
+            hybrid = dense_rrf + bm25_rrf
 
             scored_candidates.append({
                 "index": idx,
-                "dense_score": round(dense_s, 4),
-                "sparse_score": round(sparse_s, 4),
-                "hybrid_score": round(hybrid, 4),
+                "dense_rank": dense_rank,
+                "sparse_rank": bm25_rank,
+                "hybrid_score": round(hybrid, 5),
             })
 
         # Sort by hybrid score descending
         scored_candidates.sort(key=lambda x: x["hybrid_score"], reverse=True)
-        top_results = scored_candidates[:top_k]
+        
+        # Slicing for pagination after the fusion is complete
+        top_results = scored_candidates[offset:offset+limit]
 
         final_indices = [r["index"] for r in top_results]
         final_scores = [r["hybrid_score"] for r in top_results]
