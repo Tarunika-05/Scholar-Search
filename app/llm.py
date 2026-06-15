@@ -10,7 +10,7 @@ class LLMProvider:
 
 
 class AzureOpenAIProvider(LLMProvider):
-    def __init__(self, api_key: str | None = None, endpoint: str | None = None, deployment: str = "gpt-4.1"):
+    def __init__(self, api_key: str | None = None, endpoint: str | None = None, deployment: str | None = None):
         from app.config import settings
         self.api_key = api_key or settings.azure_openai_api_key
         self.endpoint = endpoint or settings.azure_openai_endpoint
