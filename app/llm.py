@@ -1,4 +1,3 @@
-import os
 import logging
 import google.generativeai as genai
 
@@ -12,10 +11,11 @@ class LLMProvider:
 
 class AzureOpenAIProvider(LLMProvider):
     def __init__(self, api_key: str | None = None, endpoint: str | None = None, deployment: str = "gpt-4.1"):
-        self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
-        self.endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
-        self.deployment = deployment
-        self.api_version = "2024-02-15-preview" # standard latest API version
+        from app.config import settings
+        self.api_key = api_key or settings.azure_openai_api_key
+        self.endpoint = endpoint or settings.azure_openai_endpoint
+        self.deployment = deployment or settings.azure_openai_model_name
+        self.api_version = settings.azure_openai_api_version
         
         if not self.api_key or not self.endpoint:
             logger.warning("Missing Azure OpenAI credentials. LLM generation will fail.")
@@ -53,7 +53,8 @@ class AzureOpenAIProvider(LLMProvider):
 
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str | None = None):
-        key = api_key or os.getenv("GEMINI_API_KEY")
+        from app.config import settings
+        key = api_key or settings.gemini_api_key
         if not key:
             logger.warning("No GEMINI_API_KEY provided. LLM generation will be disabled.")
             self.model = None

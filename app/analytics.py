@@ -1,4 +1,3 @@
-import os
 import asyncio
 from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -8,8 +7,9 @@ from app.logger import get_logger
 
 logger = get_logger("analytics")
 
-# Determine DB URL: prioritize environment variable, fallback to local file-based SQLite if running locally without Docker
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/analytics.db")
+from app.config import settings  # noqa: E402
+
+DATABASE_URL = settings.database_url
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

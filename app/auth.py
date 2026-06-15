@@ -1,7 +1,7 @@
 from enum import Enum
 from fastapi import Security, HTTPException, status
 from fastapi.security.api_key import APIKeyHeader
-import os
+from app.config import settings
 
 class Role(str, Enum):
     ADMIN = "admin"
@@ -9,10 +9,11 @@ class Role(str, Enum):
 
 API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-# In a real app, this would be in a DB or parsed from .env.
-# For demo purposes, we define static roles, but default to checking os.environ
-DEFAULT_ADMIN_KEY = "admin-secret-key"
-DEFAULT_USER_KEY = "user-secret-key"
+def get_admin_key() -> str:
+    return settings.admin_secret_key
+
+def get_user_key() -> str:
+    return settings.user_secret_key
 
 def get_api_key(api_key_header: str = Security(API_KEY_HEADER)):
     """Extracts and validates the API key."""
@@ -25,9 +26,8 @@ def get_api_key(api_key_header: str = Security(API_KEY_HEADER)):
 
 def get_user_role(api_key: str) -> Role:
     """Maps an API key to a Role."""
-    # Allow overriding via environment variable
-    admin_keys = [os.getenv("ADMIN_API_KEY", DEFAULT_ADMIN_KEY)]
-    user_keys = [os.getenv("USER_API_KEY", DEFAULT_USER_KEY)]
+    admin_keys = [get_admin_key()]
+    user_keys = [get_user_key()]
     
     if api_key in admin_keys:
         return Role.ADMIN
