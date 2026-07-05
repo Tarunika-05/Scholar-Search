@@ -11,3 +11,6 @@ services:
       - key: VITE_API_URL
         # Point the frontend to our new Hugging Face Spaces backend!
         value: "https://tarunikahf-semantic-search-api.hf.space"
+      - key: NODE_OPTIONS
+        # Prevent OOM during npm run build on 512MB Free Tier
+        value: "--max-old-space-size=400"
