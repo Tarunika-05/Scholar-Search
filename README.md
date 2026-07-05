@@ -1,5 +1,12 @@
+---
+title: Scholar Search
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
 # Scholar Search: Powered by Cognitive RAG & Semantic Caching
-
 
 Live Demo: https://semantic-search-frontend-i8zi.onrender.com/
 
